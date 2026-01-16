@@ -48,7 +48,7 @@ El proyecto ya tiene una estructura base parcialmente implementada; tu trabajo e
 
 El sistema RAG permite que el chat responda preguntas usando el contenido real de los cursos.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                         FLUJO RAG                               │
 ├─────────────────────────────────────────────────────────────────┤
@@ -157,7 +157,7 @@ npm run start:web
 
 ## Estructura del Proyecto
 
-```
+```code
 candidate-test/
 ├── apps/
 │   ├── api/                  # Backend NestJS
@@ -213,7 +213,7 @@ candidate-test/
 
 > **Nota sobre Streaming:** El streaming de respuestas (SSE/WebSocket) está clasificado como "Should Have". Si implementas streaming, hazlo en `ai.service.ts` (`generateStreamResponse`) y exponlo desde `chat.controller.ts`.
 
-4. **Modulo Knowledge (RAG)** ([`apps/api/src/modules/knowledge/`](apps/api/src/modules/knowledge/)):
+1. **Modulo Knowledge (RAG)** ([`apps/api/src/modules/knowledge/`](apps/api/src/modules/knowledge/)):
    - [ ] Implementar creacion de embeddings con OpenAI
      - Archivo: [`knowledge.service.ts`](apps/api/src/modules/knowledge/knowledge.service.ts)
    - [ ] Implementar indexacion de contenido de cursos
@@ -225,7 +225,7 @@ candidate-test/
    - [ ] Integrar RAG en el flujo del chat (usar contexto en respuestas)
      - Archivo: [`ai.service.ts`](apps/api/src/modules/ai/ai.service.ts)
 
-5. **Debugging:**
+2. **Debugging:**
 
    - [ ] Hay un bug intencional en el codigo. Encuentralo y documenta la solucion en `DECISIONS.md`
 
@@ -287,6 +287,7 @@ npm run lint               # Verificar código
 ## APIs Externas
 
 ### OpenAI
+
 - Usa `gpt-5-mini` o `gpt-4` para las respuestas
 - Usa `text-embedding-3-small` o `text-embedding-3-large` para los embeddings
 - Documenta si decides usar otro modelo y por qué
@@ -312,13 +313,13 @@ Después de ejecutar `npm run seed`:
 
 En la carpeta `data/courses/` encontrarás 5 PDFs con contenido educativo real:
 
-| Archivo | Curso | Contenido |
-|---------|-------|-----------|
-| `javascript-fundamentals.pdf` | Introducción a JavaScript | Variables, funciones, arrays, objetos, async/await |
-| `react-hooks.pdf` | React desde Cero | Hooks, estado, useEffect, useContext, optimización |
-| `nodejs-express.pdf` | Node.js y Express | Módulos, Express, middleware, rutas, errores |
-| `mongodb-fundamentals.pdf` | MongoDB Esencial | CRUD, queries, aggregation, índices, Mongoose |
-| `typescript-profesional.pdf` | TypeScript Profesional | Tipos, interfaces, genéricos, utility types |
+|Archivo|Curso|Contenido|
+|---|---|---|
+|`javascript-fundamentals.pdf`|Introducción a JavaScript|Variables, funciones, arrays, objetos, async/await|
+|`react-hooks.pdf`|React desde Cero|Hooks, estado, useEffect, useContext, optimización|
+|`nodejs-express.pdf`|Node.js y Express|Módulos, Express, middleware, rutas, errores|
+|`mongodb-fundamentals.pdf`|MongoDB Esencial|CRUD, queries, aggregation, índices, Mongoose|
+|`typescript-profesional.pdf`|TypeScript Profesional|Tipos, interfaces, genéricos, utility types|
 
 **Para extraer texto de los PDFs**, puedes usar la librería `pdf-parse`:
 
