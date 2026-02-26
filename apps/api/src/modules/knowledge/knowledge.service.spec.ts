@@ -3,9 +3,24 @@ import { getModelToken } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { KnowledgeService } from './knowledge.service';
 import { KnowledgeChunk } from './schemas/knowledge-chunk.schema';
+import { Types } from 'mongoose';
+
+const mockEmbeddingsCreate = jest.fn();
+
+jest.mock('openai', () => {
+  return {
+    __esModule: true,
+    default: class {
+      embeddings = {
+        create: mockEmbeddingsCreate,
+      };
+    },
+  };
+});
 
 describe('KnowledgeService', () => {
   let service: KnowledgeService;
+  let model: any;
 
   const mockKnowledgeChunkModel = {
     create: jest.fn(),
@@ -16,10 +31,15 @@ describe('KnowledgeService', () => {
   };
 
   const mockConfigService = {
-    get: jest.fn(),
+    get: jest.fn((key: string) => {
+      if (key === 'OPENAI_API_KEY') return 'sk-test-key';
+      return null;
+    }),
   };
 
   beforeEach(async () => {
+    mockEmbeddingsCreate.mockReset();
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         KnowledgeService,
@@ -35,6 +55,7 @@ describe('KnowledgeService', () => {
     }).compile();
 
     service = module.get<KnowledgeService>(KnowledgeService);
+    model = module.get(getModelToken(KnowledgeChunk.name));
   });
 
   afterEach(() => {
@@ -74,12 +95,145 @@ describe('KnowledgeService', () => {
     });
   });
 
-  /**
-   * TODO: El candidato debe implementar estos tests
-   */
-  it.todo('should create embeddings using OpenAI API');
-  it.todo('should index course content into chunks');
-  it.todo('should search for similar content');
-  it.todo('should filter search results by courseId');
-  it.todo('should return results sorted by similarity score');
+  it('should create embeddings using OpenAI API', async () => {
+    const mockEmbedding = [0.1, 0.2, 0.3];
+    mockEmbeddingsCreate.mockResolvedValue({
+      data: [{ embedding: mockEmbedding }],
+      usage: { total_tokens: 10 },
+    } as any);
+
+    const result = await service.createEmbedding('test text');
+
+    expect(mockEmbeddingsCreate).toHaveBeenCalledWith({
+      model: 'text-embedding-3-small',
+      input: 'test text',
+    });
+    expect(result).toEqual({ embedding: mockEmbedding, tokenCount: 10 });
+  });
+
+  it('should index course content into chunks', async () => {
+    const courseId = new Types.ObjectId().toString();
+    const content = 'Sentence 1. Sentence 2.';
+    const mockEmbedding = [0.1, 0.2, 0.3];
+
+    mockKnowledgeChunkModel.deleteMany.mockResolvedValue({ deletedCount: 0 });
+    mockEmbeddingsCreate.mockResolvedValue({
+      data: [{ embedding: mockEmbedding }],
+      usage: { total_tokens: 10 },
+    } as any);
+    mockKnowledgeChunkModel.create.mockResolvedValue({});
+
+    const result = await service.indexCourseContent(courseId, content, 'test.pdf');
+
+    expect(mockKnowledgeChunkModel.deleteMany).toHaveBeenCalledWith({
+      courseId: new Types.ObjectId(courseId),
+    });
+    expect(mockEmbeddingsCreate).toHaveBeenCalledTimes(1);
+    expect(mockKnowledgeChunkModel.create).toHaveBeenCalledTimes(1);
+    expect(result.chunksCreated).toBe(1);
+  });
+
+  it('should search for similar content', async () => {
+    const query = 'test query';
+    const mockQueryEmbedding = [1, 0, 0];
+
+    mockEmbeddingsCreate.mockResolvedValueOnce({
+      data: [{ embedding: mockQueryEmbedding }],
+      usage: { total_tokens: 10 },
+    } as any);
+
+    const mockChunks = [
+      {
+        _id: '1',
+        content: 'Chunk 1 (Orthogonal)',
+        embedding: [0, 1, 0],
+        courseId: new Types.ObjectId(),
+      },
+      {
+        _id: '2',
+        content: 'Chunk 2 (Identical)',
+        embedding: [1, 0, 0],
+        courseId: new Types.ObjectId(),
+      },
+    ];
+
+    mockKnowledgeChunkModel.find.mockReturnValue({
+      lean: jest.fn().mockResolvedValue(mockChunks),
+    } as any);
+
+    const results = await service.searchSimilar(query);
+
+    expect(mockEmbeddingsCreate).toHaveBeenCalledWith({
+      model: 'text-embedding-3-small',
+      input: query,
+    });
+    expect(results.length).toBeGreaterThan(0);
+    results.forEach((r) => {
+      expect(r).toHaveProperty('content');
+      expect(r).toHaveProperty('courseId');
+      expect(r).toHaveProperty('score');
+    });
+  });
+
+  it('should filter search results by courseId', async () => {
+    const courseId = new Types.ObjectId().toString();
+    mockEmbeddingsCreate.mockResolvedValue({
+      data: [{ embedding: [1, 0, 0] }],
+      usage: { total_tokens: 10 },
+    } as any);
+
+    const findMock = jest.fn().mockReturnValue({
+      lean: jest.fn().mockResolvedValue([]),
+    });
+    mockKnowledgeChunkModel.find = findMock as any;
+
+    await service.searchSimilar('query', { courseId });
+
+    expect(findMock).toHaveBeenCalledWith(
+      expect.objectContaining({ courseId: new Types.ObjectId(courseId) })
+    );
+  });
+
+  it('should return results sorted by similarity score', async () => {
+    const query = 'test query';
+    const mockQueryEmbedding = [1, 0, 0];
+
+    mockEmbeddingsCreate.mockResolvedValueOnce({
+      data: [{ embedding: mockQueryEmbedding }],
+      usage: { total_tokens: 10 },
+    } as any);
+
+    const mockChunks = [
+      {
+        _id: '1',
+        content: 'Chunk 1 (Orthogonal)',
+        embedding: [0, 1, 0],
+        courseId: new Types.ObjectId(),
+      },
+      {
+        _id: '2',
+        content: 'Chunk 2 (Identical)',
+        embedding: [1, 0, 0],
+        courseId: new Types.ObjectId(),
+      },
+      {
+        _id: '3',
+        content: 'Chunk 3 (Semi)',
+        embedding: [0.707, 0.707, 0],
+        courseId: new Types.ObjectId(),
+      },
+    ];
+
+    mockKnowledgeChunkModel.find.mockReturnValue({
+      lean: jest.fn().mockResolvedValue(mockChunks),
+    } as any);
+
+    const results = await service.searchSimilar(query);
+
+    expect(results.length).toBe(2);
+    expect(results[0].content).toBe('Chunk 2 (Identical)');
+    expect(results[0].score).toBeCloseTo(1);
+    expect(results[1].content).toBe('Chunk 3 (Semi)');
+    expect(results[1].score).toBeCloseTo(0.707);
+  });
 });

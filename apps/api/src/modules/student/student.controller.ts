@@ -53,10 +53,11 @@ export class StudentController {
   @ApiParam({ name: 'id', description: 'ID del estudiante' })
   @ApiResponse({ status: 200, description: 'Estadísticas del estudiante' })
   async getStats(@Param('id') id: string) {
-    // TODO: Implementar este método en StudentService
-    // return this.studentService.getDetailedStats(id);
-
-    throw new Error('Not implemented - El candidato debe implementar este endpoint');
+    const stats = await this.studentService.getDetailedStats(id);
+    if (!stats) {
+      throw new NotFoundException(`Estudiante con ID ${id} no encontrado`);
+    }
+    return stats;
   }
 
   /**
@@ -77,9 +78,10 @@ export class StudentController {
     @Param('id') id: string,
     @Body() updatePreferencesDto: UpdatePreferencesDto
   ) {
-    // TODO: Implementar este método en StudentService
-    // return this.studentService.updatePreferences(id, updatePreferencesDto);
-
-    throw new Error('Not implemented - El candidato debe implementar este endpoint');
+    const updated = await this.studentService.updatePreferences(id, updatePreferencesDto);
+    if (!updated) {
+      throw new NotFoundException(`Estudiante con ID ${id} no encontrado`);
+    }
+    return updated;
   }
 }

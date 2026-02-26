@@ -10,29 +10,30 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse } from '@nestjs/swagger';
-import { KnowledgeService } from './knowledge.service';
+import { KnowledgeService, SearchResult } from './knowledge.service';
 
 @ApiTags('Knowledge')
 @Controller('knowledge')
 export class KnowledgeController {
   constructor(private readonly knowledgeService: KnowledgeService) {}
 
-  /**
-   * TODO: Implement content indexing endpoint
-   */
   @Post('index')
   @ApiOperation({ summary: 'Indexar contenido de un curso' })
   @ApiResponse({ status: 201, description: 'Contenido indexado exitosamente' })
   async indexContent(
     @Body() body: { courseId: string; content: string; sourceFile?: string }
   ) {
-    // TODO: Implementar
-    throw new Error('Not implemented');
+    if (!body.courseId || !body.content) {
+      throw new Error('Course ID and content are required');
+    }
+
+    return this.knowledgeService.indexCourseContent(
+      body.courseId,
+      body.content,
+      body.sourceFile || 'unknown'
+    );
   }
 
-  /**
-   * TODO: Implement semantic search endpoint
-   */
   @Get('search')
   @ApiOperation({ summary: 'Buscar contenido similar' })
   @ApiResponse({ status: 200, description: 'Resultados de busqueda' })
@@ -40,23 +41,23 @@ export class KnowledgeController {
     @Query('q') query: string,
     @Query('courseId') courseId?: string,
     @Query('limit') limit?: number
-  ) {
-    // TODO: Implementar
-    throw new Error('Not implemented');
+  ): Promise<SearchResult[]> {
+    if (!query) {
+      return [];
+    }
+
+    return this.knowledgeService.searchSimilar(query, {
+      courseId,
+      limit: limit ? Number(limit) : undefined,
+    });
   }
 
-  /**
-   * Obtener estadisticas de la base de conocimiento
-   */
   @Get('stats')
   @ApiOperation({ summary: 'Estadisticas de la base de conocimiento' })
   async getStats() {
     return this.knowledgeService.getStats();
   }
 
-  /**
-   * Eliminar chunks de un curso
-   */
   @Delete('course/:courseId')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Eliminar conocimiento de un curso' })

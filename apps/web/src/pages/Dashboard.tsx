@@ -1,46 +1,59 @@
 import { useQuery } from '@tanstack/react-query';
-import styled from 'styled-components';
-import { BookOpen, CheckCircle, Clock, Target, BarChart3 } from 'lucide-react';
+import styled, { keyframes } from 'styled-components';
+import { BookOpen, CheckCircle, Clock, Target, RefreshCw, Flame } from 'lucide-react';
 import { StatsCard } from '../components/StatsCard';
 import { CourseCard } from '../components/CourseCard';
+import { ActivityChart } from '../components/ActivityChart';
 import { api } from '../services/api';
 
 interface DashboardProps {
   studentId: string;
 }
 
-/**
- * ✅ PARCIALMENTE IMPLEMENTADO - Página del Dashboard
- *
- * El candidato debe completar:
- * 1. Implementar el componente ActivityChart (gráfico de actividad semanal)
- * 2. Implementar la lista de cursos con scroll horizontal
- * 3. Añadir estados de loading y error
- * 4. Implementar la sección de cursos recientes
- */
 export function Dashboard({ studentId }: DashboardProps) {
-  const { data: dashboard, isLoading, error } = useQuery({
+  const { data: dashboard, isLoading, error, refetch } = useQuery({
     queryKey: ['dashboard', studentId],
     queryFn: () => api.getDashboard(studentId),
   });
 
-  const { data: courses } = useQuery({
+  const { data: courses, isLoading: isLoadingCourses } = useQuery({
     queryKey: ['courses', studentId],
     queryFn: () => api.getCourses(studentId),
   });
 
-  // TODO: Implementar estado de loading con skeleton
+  const { data: stats } = useQuery({
+    queryKey: ['stats', studentId],
+    queryFn: () => api.getStats(studentId),
+    enabled: !!dashboard,
+  });
+
   if (isLoading) {
-    return <LoadingState>Cargando dashboard...</LoadingState>;
+    return <DashboardSkeleton />;
   }
 
-  // TODO: Implementar estado de error con retry
   if (error) {
-    return <ErrorState>Error al cargar el dashboard</ErrorState>;
+    return (
+      <ErrorContainer>
+        <ErrorIcon>!</ErrorIcon>
+        <ErrorTitle>Error al cargar el dashboard</ErrorTitle>
+        <ErrorDescription>
+          {(error as Error).message || 'No se pudo conectar con el servidor.'}
+        </ErrorDescription>
+        <RetryButton onClick={() => refetch()}>
+          <RefreshCw size={16} />
+          Reintentar
+        </RetryButton>
+      </ErrorContainer>
+    );
   }
 
   if (!dashboard) {
-    return <ErrorState>No se encontraron datos</ErrorState>;
+    return (
+      <ErrorContainer>
+        <ErrorTitle>No se encontraron datos</ErrorTitle>
+        <ErrorDescription>No hay información disponible para este estudiante.</ErrorDescription>
+      </ErrorContainer>
+    );
   }
 
   return (
@@ -52,90 +65,83 @@ export function Dashboard({ studentId }: DashboardProps) {
         </Greeting>
       </Header>
 
-      {/* Sección de estadísticas */}
       <StatsGrid>
         <StatsCard
           title="Cursos Activos"
-          value={dashboard.stats.inProgressCourses}
+          value={stats?.inProgressCourses ?? dashboard.stats.inProgressCourses}
           icon={<BookOpen size={24} />}
           color="var(--color-primary)"
         />
         <StatsCard
           title="Cursos Completados"
-          value={dashboard.stats.completedCourses}
+          value={stats?.completedCourses ?? dashboard.stats.completedCourses}
           icon={<CheckCircle size={24} />}
           color="var(--color-success)"
         />
         <StatsCard
           title="Tiempo de Estudio"
-          value={dashboard.stats.totalTimeSpentFormatted}
+          value={stats?.totalTimeSpentFormatted ?? dashboard.stats.totalTimeSpentFormatted}
           icon={<Clock size={24} />}
           color="var(--color-secondary)"
           subtitle="Total acumulado"
         />
         <StatsCard
+          title="Racha de Estudio"
+          value={stats?.studyStreak != null ? `${stats.studyStreak} días` : '—'}
+          icon={<Flame size={24} />}
+          color="#f59e0b"
+          subtitle="Días consecutivos"
+        />
+        <StatsCard
           title="Total Cursos"
-          value={dashboard.stats.totalCourses}
+          value={stats?.totalCourses ?? dashboard.stats.totalCourses}
           icon={<Target size={24} />}
           color="var(--color-primary)"
         />
       </StatsGrid>
 
-      {/* 📝 TODO: Implementar gráfico de actividad semanal */}
       <Section>
         <SectionTitle>Actividad Semanal</SectionTitle>
-        <ActivityChartPlaceholder>
-          {/* TODO: El candidato debe implementar ActivityChart
-           *
-           * Requisitos:
-           * - Mostrar actividad de los últimos 7 días
-           * - Usar chart.js o recharts
-           * - Mostrar horas de estudio por día
-           * - Incluir tooltip con detalles
-           *
-           * Datos de ejemplo:
-           * const weeklyData = [
-           *   { day: 'Lun', hours: 2.5 },
-           *   { day: 'Mar', hours: 1.0 },
-           *   { day: 'Mié', hours: 3.0 },
-           *   ...
-           * ];
-           */}
-          <PlaceholderText>
-            <BarChart3 size={32} style={{ marginBottom: '8px', opacity: 0.5 }} />
-            <br />
-            Gráfico de Actividad
-            <br />
-            <small>TODO: Implementar con chart.js o recharts</small>
-          </PlaceholderText>
-        </ActivityChartPlaceholder>
+        <ActivityChart weeklyActivity={stats?.weeklyActivity} />
       </Section>
 
-      {/* Sección de cursos recientes */}
       <Section>
         <SectionHeader>
           <SectionTitle>Continúa donde lo dejaste</SectionTitle>
           <ViewAllLink href="/courses">Ver todos →</ViewAllLink>
         </SectionHeader>
 
-        {/* 📝 TODO: Implementar lista de cursos con mejor UX */}
-        <CoursesGrid>
-          {courses?.slice(0, 4).map((course: any) => (
-            <CourseCard
-              key={course._id}
-              title={course.title}
-              description={course.description}
-              thumbnail={course.thumbnail}
-              progress={course.progress?.progressPercentage || 0}
-              category={course.category}
-              totalLessons={course.totalLessons}
-              completedLessons={course.progress?.completedLessons || 0}
-            />
-          ))}
-        </CoursesGrid>
+        {isLoadingCourses ? (
+          <CoursesGrid>
+            {[1, 2, 3, 4].map((i) => (
+              <SkeletonCourseCard key={i}>
+                <SkeletonBlock $width="100%" $height="140px" />
+                <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <SkeletonBlock $width="80%" $height="16px" />
+                  <SkeletonBlock $width="60%" $height="12px" />
+                  <SkeletonBlock $width="100%" $height="8px" />
+                </div>
+              </SkeletonCourseCard>
+            ))}
+          </CoursesGrid>
+        ) : (
+          <CoursesGrid>
+            {courses?.slice(0, 4).map((course: any) => (
+              <CourseCard
+                key={course._id}
+                title={course.title}
+                description={course.description}
+                thumbnail={course.thumbnail}
+                progress={course.progress?.progressPercentage || 0}
+                category={course.category}
+                totalLessons={course.totalLessons}
+                completedLessons={course.progress?.completedLessons || 0}
+              />
+            ))}
+          </CoursesGrid>
+        )}
 
-        {/* TODO: Implementar empty state si no hay cursos */}
-        {courses?.length === 0 && (
+        {!isLoadingCourses && courses?.length === 0 && (
           <EmptyState>
             No tienes cursos todavía. ¡Explora el catálogo!
           </EmptyState>
@@ -144,6 +150,55 @@ export function Dashboard({ studentId }: DashboardProps) {
     </Container>
   );
 }
+
+const DashboardSkeleton = () => {
+  return (
+<Container>
+        <Header>
+          <Greeting>
+            <SkeletonBlock $width="280px" $height="32px" />
+            <SkeletonBlock $width="200px" $height="18px" style={{ marginTop: '8px' }} />
+          </Greeting>
+        </Header>
+
+        <StatsGrid>
+          {[1, 2, 3, 4].map((i) => (
+            <SkeletonCard key={i}>
+              <SkeletonBlock $width="40px" $height="40px" $rounded />
+              <SkeletonBlock $width="100px" $height="14px" />
+              <SkeletonBlock $width="60px" $height="28px" />
+            </SkeletonCard>
+          ))}
+        </StatsGrid>
+
+        <Section>
+          <SkeletonBlock $width="160px" $height="20px" />
+          <SkeletonChartBlock />
+        </Section>
+
+        <Section>
+          <SkeletonBlock $width="220px" $height="20px" />
+          <CoursesGrid>
+            {[1, 2, 3, 4].map((i) => (
+              <SkeletonCourseCard key={i}>
+                <SkeletonBlock $width="100%" $height="140px" />
+                <div style={{ padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <SkeletonBlock $width="80%" $height="16px" />
+                  <SkeletonBlock $width="60%" $height="12px" />
+                  <SkeletonBlock $width="100%" $height="8px" />
+                </div>
+              </SkeletonCourseCard>
+            ))}
+          </CoursesGrid>
+        </Section>
+      </Container>
+  );
+};
+
+const shimmer = keyframes`
+  0% { background-position: -200px 0; }
+  100% { background-position: calc(200px + 100%) 0; }
+`;
 
 const Container = styled.div`
   max-width: 1200px;
@@ -197,41 +252,10 @@ const ViewAllLink = styled.a`
   font-weight: 500;
 `;
 
-const ActivityChartPlaceholder = styled.div`
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  height: 200px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-`;
-
-const PlaceholderText = styled.div`
-  text-align: center;
-  color: var(--color-text-secondary);
-`;
-
 const CoursesGrid = styled.div`
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: var(--spacing-md);
-`;
-
-const LoadingState = styled.div`
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 400px;
-  color: var(--color-text-secondary);
-`;
-
-const ErrorState = styled.div`
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 400px;
-  color: var(--color-error);
 `;
 
 const EmptyState = styled.div`
@@ -241,4 +265,94 @@ const EmptyState = styled.div`
   background: var(--color-surface);
   border-radius: var(--radius-lg);
   border: 1px dashed var(--color-border);
+`;
+
+const SkeletonBlock = styled.div<{ $width: string; $height: string; $rounded?: boolean }>`
+  width: ${(props) => props.$width};
+  height: ${(props) => props.$height};
+  border-radius: ${(props) => (props.$rounded ? 'var(--radius-full)' : 'var(--radius-md)')};
+  background: linear-gradient(90deg, var(--color-border) 25%, var(--color-surface) 37%, var(--color-border) 63%);
+  background-size: 400px 100%;
+  animation: ${shimmer} 1.4s ease infinite;
+`;
+
+const SkeletonCard = styled.div`
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: var(--spacing-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+`;
+
+const SkeletonChartBlock = styled.div`
+  height: 200px;
+  border-radius: var(--radius-lg);
+  margin-top: var(--spacing-md);
+  background: linear-gradient(90deg, var(--color-border) 25%, var(--color-surface) 37%, var(--color-border) 63%);
+  background-size: 400px 100%;
+  animation: ${shimmer} 1.4s ease infinite;
+`;
+
+const SkeletonCourseCard = styled.div`
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+`;
+
+const ErrorContainer = styled.div`
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 400px;
+  gap: var(--spacing-sm);
+`;
+
+const ErrorIcon = styled.div`
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-full);
+  background: #fef2f2;
+  color: var(--color-error, #dc2626);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  font-weight: 700;
+`;
+
+const ErrorTitle = styled.h2`
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+`;
+
+const ErrorDescription = styled.p`
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  max-width: 400px;
+  text-align: center;
+`;
+
+const RetryButton = styled.button`
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xs);
+  margin-top: var(--spacing-sm);
+  padding: var(--spacing-sm) var(--spacing-lg);
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+
+  &:hover {
+    opacity: 0.9;
+  }
 `;

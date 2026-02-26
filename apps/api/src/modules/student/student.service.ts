@@ -99,25 +99,185 @@ export class StudentService {
     });
   }
 
-  /**
-   * TODO: Implement detailed statistics
-   */
   async getDetailedStats(studentId: string) {
-    // TODO: El candidato debe implementar este método
-    throw new Error('Not implemented');
+    const student = await this.studentModel.findById(studentId).lean();
+    if (!student) return null;
+  
+    const sid = new Types.ObjectId(studentId);
+  
+    const [res] = await this.progressModel.aggregate([
+      { $match: { studentId: sid } },
+      {
+        $facet: {
+          summary: [
+            {
+              $group: {
+                _id: null,
+                totalCourses: { $sum: 1 },
+                completedCourses: {
+                  $sum: { $cond: [{ $eq: ['$progressPercentage', 100] }, 1, 0] },
+                },
+                inProgressCourses: {
+                  $sum: {
+                    $cond: [
+                      {
+                        $and: [
+                          { $gt: ['$progressPercentage', 0] },
+                          { $lt: ['$progressPercentage', 100] },
+                        ],
+                      },
+                      1,
+                      0,
+                    ],
+                  },
+                },
+                notStartedCourses: {
+                  $sum: { $cond: [{ $eq: ['$progressPercentage', 0] }, 1, 0] },
+                },
+                totalTimeSpentMinutes: {
+                  $sum: { $ifNull: ['$timeSpentMinutes', 0] },
+                },
+                averageProgress: { $avg: '$progressPercentage' },
+              },
+            },
+          ],
+  
+          timeByCategory: [
+            {
+              $lookup: {
+                from: 'courses',
+                localField: 'courseId',
+                foreignField: '_id',
+                as: 'course',
+              },
+            },
+            { $unwind: '$course' },
+            {
+              $group: {
+                _id: '$course.category',
+                totalMinutes: { $sum: { $ifNull: ['$timeSpentMinutes', 0] } },
+              },
+            },
+            { $project: { category: '$_id', totalMinutes: 1, _id: 0 } },
+          ],
+          
+          studyDates: [
+            { $match: { lastAccessedAt: { $ne: null } } },
+            {
+              $group: {
+                _id: {
+                  $dateToString: { format: '%Y-%m-%d', date: '$lastAccessedAt' },
+                },
+              },
+            },
+            { $sort: { _id: -1 } },
+            { $project: { date: '$_id', _id: 0 } },
+          ],
+
+          weeklyActivity: [
+            {
+              $match: {
+                lastAccessedAt: {
+                  $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+                },
+              },
+            },
+            {
+              $group: {
+                _id: {
+                  $dateToString: { format: '%Y-%m-%d', date: '$lastAccessedAt' },
+                },
+                minutes: { $sum: { $ifNull: ['$timeSpentMinutes', 0] } },
+              },
+            },
+            { $sort: { _id: 1 } },
+            { $project: { date: '$_id', minutes: 1, _id: 0 } },
+          ],
+        },
+      },
+      {
+        $project: {
+          summary: { $ifNull: [{ $arrayElemAt: ['$summary', 0] }, {}] },
+          timeByCategory: 1,
+          studyDates: 1,
+          weeklyActivity: 1,
+        },
+      },
+    ]);
+
+    const {
+      totalCourses = 0,
+      completedCourses = 0,
+      inProgressCourses = 0,
+      notStartedCourses = 0,
+      totalTimeSpentMinutes = 0,
+      averageProgress = 0,
+    } = res.summary;
+  
+    const timeByCategory: Record<string, number> = {};
+    for (const { category, totalMinutes } of res.timeByCategory) {
+      if (category) timeByCategory[category] = totalMinutes;
+    }
+  
+    const streakDates = res.studyDates.map((d) => d.date);
+    const studyStreak = this.calculateStudyStreak(streakDates);
+  
+    return {
+      totalCourses,
+      completedCourses,
+      inProgressCourses,
+      notStartedCourses,
+      totalTimeSpentMinutes,
+      totalTimeSpentFormatted: this.formatTime(totalTimeSpentMinutes),
+      averageProgress: Math.round(averageProgress),
+      studyStreak,
+      timeByCategory,
+      weeklyActivity: res.weeklyActivity,
+    };
   }
 
-  /**
-   * TODO: Implement preferences update
-   */
   async updatePreferences(studentId: string, dto: UpdatePreferencesDto) {
-    // TODO: El candidato debe implementar este método
-    throw new Error('Not implemented');
+    const student = await this.studentModel.findById(studentId).lean();
+    if (!student) return null;
+
+    const mergedPreferences = {
+      ...student.preferences,
+      ...dto,
+    };
+
+    const updated = await this.studentModel
+      .findByIdAndUpdate(
+        studentId,
+        { $set: { preferences: mergedPreferences } },
+        { new: true }
+      )
+      .lean();
+
+    return updated;
   }
 
-  /**
-   * Helper para formatear tiempo
-   */
+  private calculateStudyStreak(dayStrings: string[]): number {
+    if (!dayStrings?.length) return 0;
+  
+    const daysSet = new Set(dayStrings);
+  
+    const now = new Date();
+    const todayUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  
+    const toYMD = (d: Date) => d.toISOString().slice(0, 10);
+  
+    let streak = 0;
+    for (let i = 0; ; i++) {
+      const d = new Date(todayUtc);
+      d.setUTCDate(d.getUTCDate() - i);
+      const key = toYMD(d);
+      if (!daysSet.has(key)) break;
+      streak++;
+    }
+  
+    return streak;
+  }
+
   private formatTime(minutes: number): string {
     const hours = Math.floor(minutes / 60);
     const mins = minutes % 60;

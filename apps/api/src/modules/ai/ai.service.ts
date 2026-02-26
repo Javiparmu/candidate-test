@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-// TODO: Descomentar cuando el candidato implemente la integración real
-// import OpenAI from 'openai';
+import { OpenAiUnavailableException } from './exceptions/openai-unavailable.exception';
+import OpenAI from 'openai';
+import { ResponseInput } from 'openai/resources/responses/responses';
 
 interface MessageHistory {
   role: 'user' | 'assistant' | 'system';
@@ -16,9 +17,12 @@ interface AiResponse {
 
 @Injectable()
 export class AiService {
+  private static readonly RETRY_MAX_ATTEMPTS = 3;
+  private static readonly RETRY_BASE_DELAY_MS = 300;
+
   private readonly logger = new Logger(AiService.name);
-  // TODO: Descomentar cuando el candidato implemente la integración real
-  // private openai: OpenAI;
+  private readonly openai: OpenAI;
+  private readonly chatModel: string;
 
   /**
    * System prompt base para el asistente de estudiantes
@@ -39,80 +43,183 @@ Reglas:
 - Usa ejemplos prácticos cuando sea posible`;
 
   constructor(private readonly configService: ConfigService) {
-    // TODO: El candidato debe inicializar el cliente de OpenAI
-    // const apiKey = this.configService.get<string>('OPENAI_API_KEY');
-    // if (apiKey) {
-    //   this.openai = new OpenAI({ apiKey });
-    // }
+    const apiKey = this.configService.get<string>('OPENAI_API_KEY');
+    this.chatModel = this.configService.get<string>('OPENAI_CHAT_MODEL') || 'gpt-4';
+
+    if (apiKey) {
+      this.openai = new OpenAI({ apiKey });
+    } else {
+      this.logger.warn('OPENAI_API_KEY not configured. Placeholder responses will be used.');
+    }
   }
 
-  /**
-   * ✅ ESTRUCTURA BASE - Genera respuesta del asistente
-   *
-   * Actualmente retorna una respuesta placeholder.
-   * El candidato debe:
-   * 1. Implementar la llamada real a OpenAI
-   * 2. Manejar errores de la API
-   * 3. Implementar retry logic si es necesario
-   * 4. Considerar rate limiting
-   */
   async generateResponse(
     userMessage: string,
-    history: MessageHistory[] = []
+    history: MessageHistory[] = [],
   ): Promise<AiResponse> {
     this.logger.debug(`Generando respuesta para: "${userMessage.substring(0, 50)}..."`);
 
-    // TODO: Implement OpenAI integration
-
-    // Respuesta placeholder mientras no está implementado
-    return this.generatePlaceholderResponse(userMessage);
+    return this.response(userMessage, history, this.baseSystemPrompt);
   }
 
-  /**
-   * TODO: Implement streaming responses
-   */
+  async generateResponseWithRAG(
+    userMessage: string,
+    history: MessageHistory[] = [],
+    relevantContext: string[] = []
+  ): Promise<AiResponse> {
+    const contextBlock = relevantContext.length > 0
+      ? `\n\nINFORMACIÓN RELEVANTE:\n${relevantContext.join('\n\n')}\n\nUsa esta información para responder.`
+      : '';
+    return this.response(
+      userMessage,
+      history,
+      this.baseSystemPrompt + contextBlock
+    );
+  }
+
+  private async response(
+    userMessage: string,
+    history: MessageHistory[],
+    systemPrompt: string
+  ): Promise<AiResponse> {
+    if (!this.isConfigured()) {
+      this.logger.warn('OPENAI_API_KEY not configured. Placeholder responses will be used.');
+      return this.generatePlaceholderResponse(userMessage);
+    }
+
+    const messages: ResponseInput = [
+      { role: 'system', content: systemPrompt },
+      ...history,
+      { role: 'user', content: userMessage.trim() },
+    ];
+
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= AiService.RETRY_MAX_ATTEMPTS; attempt++) {
+      try {
+        const response = await this.openai.responses.create({
+          model: this.chatModel,
+          input: messages,
+        });
+
+        const content = response.output_text?.trim();
+
+        if (!content) {
+          throw new Error('Empty response from OpenAI');
+        }
+
+        return {
+          content,
+          tokensUsed: response.usage?.total_tokens,
+          model: response.model,
+        };
+      } catch (error) {
+        lastError = error;
+
+        if (!this.shouldRetry(error) || attempt === AiService.RETRY_MAX_ATTEMPTS) {
+          break;
+        }
+
+        const delayMs = AiService.RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
+        this.logger.warn(
+          `Transient OpenAI error (attempt ${attempt}/${AiService.RETRY_MAX_ATTEMPTS}). Retrying in ${delayMs}ms`
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+
+    this.logger.error('Failed to generate response with OpenAI', lastError as Error);
+    throw new OpenAiUnavailableException(
+      'OpenAI no está disponible. Por favor, inténtalo de nuevo más tarde.',
+      lastError
+    );
+  }
+
   async *generateStreamResponse(
     userMessage: string,
     history: MessageHistory[] = []
   ): AsyncGenerator<string> {
-    // TODO: Implementar streaming real con OpenAI
-    // Placeholder actual - simula streaming
-    const placeholder = await this.generatePlaceholderResponse(userMessage);
-    const words = placeholder.content.split(' ');
+    yield* this.stream(userMessage, history, this.baseSystemPrompt);
+  }
 
-    for (const word of words) {
-      yield word + ' ';
-      await new Promise((resolve) => setTimeout(resolve, 50));
+  async *generateStreamResponseWithRAG(
+    userMessage: string,
+    history: MessageHistory[] = [],
+    relevantContext: string[] = []
+  ): AsyncGenerator<string> {
+    const contextBlock = relevantContext.length > 0
+      ? `\n\nINFORMACIÓN RELEVANTE:\n${relevantContext.join('\n\n')}\n\nUsa esta información para responder.`
+      : '';
+    yield* this.stream(
+      userMessage,
+      history,
+      this.baseSystemPrompt + contextBlock
+    );
+  }
+
+  private async *stream(
+    userMessage: string,
+    history: MessageHistory[],
+    systemPrompt: string
+  ): AsyncGenerator<string> {
+    if (!this.openai) {
+      const placeholder = this.generatePlaceholderResponse(userMessage);
+      const words = placeholder.content.split(' ');
+      for (const word of words) {
+        yield word + ' ';
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      return;
+    }
+
+    const openai = this.openai;
+    const messages: ResponseInput = [
+      { role: 'system', content: systemPrompt },
+      ...history,
+      { role: 'user', content: userMessage.trim() },
+    ];
+
+    try {
+      const stream = await openai.responses.create({
+        model: this.chatModel,
+        input: messages,
+        stream: true,
+      });
+
+      for await (const event of stream) {
+        if (
+          event.type === 'response.output_text.delta' &&
+          'delta' in event
+        ) {
+          yield event.delta as string;
+        }
+      }
+    } catch (error) {
+      this.logger.error('OpenAI stream failed', error as Error);
+      throw new OpenAiUnavailableException(
+        'Error al generar la respuesta en streaming. Inténtalo de nuevo.',
+        error
+      );
     }
   }
 
-  /**
-   * TODO: Implement contextual system prompt
-   */
   buildContextualSystemPrompt(studentContext: {
     name: string;
     currentCourse?: string;
     progress?: number;
   }): string {
-    // TODO: Implementar personalizacion del prompt
-    return this.baseSystemPrompt;
+    let prompt = this.baseSystemPrompt;
+    prompt += `\n\nContexto del estudiante:`;
+    prompt += `\n- Nombre: ${studentContext.name}`;
+    if (studentContext.currentCourse) {
+      prompt += `\n- Curso actual: ${studentContext.currentCourse}`;
+    }
+    if (studentContext.progress !== undefined) {
+      prompt += `\n- Progreso: ${studentContext.progress}%`;
+    }
+    return prompt;
   }
 
-  /**
-   * TODO: Implement RAG-enhanced response generation
-   */
-  async generateResponseWithRAG(
-    userMessage: string,
-    history: MessageHistory[] = [],
-    relevantContext?: string[]
-  ): Promise<AiResponse> {
-    // TODO: Implement
-    throw new Error('Not implemented');
-  }
-
-  /**
-   * Genera una respuesta placeholder para desarrollo
-   */
   private generatePlaceholderResponse(userMessage: string): AiResponse {
     const responses = [
       '¡Hola! Soy tu asistente de estudios. Veo que tienes una pregunta interesante. Para ayudarte mejor, ¿podrías darme más detalles sobre el tema específico del curso en el que necesitas ayuda?',
@@ -135,5 +242,19 @@ Reglas:
    */
   isConfigured(): boolean {
     return !!this.configService.get<string>('OPENAI_API_KEY');
+  }
+
+  private shouldRetry(error: unknown): boolean {
+    if (!error || typeof error !== 'object') {
+      return false;
+    }
+
+    const maybeStatus = (
+      error as {
+        status?: number;
+      }
+    ).status;
+
+    return maybeStatus === 429 || (typeof maybeStatus === 'number' && maybeStatus >= 500);
   }
 }

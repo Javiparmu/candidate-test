@@ -6,10 +6,14 @@ import {
   Body,
   Param,
   Query,
+  Res,
   HttpCode,
   HttpStatus,
+  NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
+import { Response } from 'express';
 import { ChatService } from './chat.service';
 import { SendMessageDto } from './dto/send-message.dto';
 
@@ -26,6 +30,7 @@ export class ChatController {
   @ApiOperation({ summary: 'Enviar mensaje al chat con IA' })
   @ApiResponse({ status: 201, description: 'Mensaje enviado y respuesta generada' })
   @ApiResponse({ status: 400, description: 'Datos inválidos' })
+  @ApiResponse({ status: 503, description: 'Servicio de IA no disponible' })
   async sendMessage(@Body() dto: SendMessageDto) {
     return this.chatService.sendMessage(dto);
   }
@@ -43,9 +48,6 @@ export class ChatController {
     return this.chatService.startNewConversation(studentId, initialContext);
   }
 
-  /**
-   * TODO: Implement history retrieval with pagination
-   */
   @Get('history/:studentId')
   @ApiOperation({ summary: 'Obtener historial de chat del estudiante' })
   @ApiParam({ name: 'studentId', description: 'ID del estudiante' })
@@ -59,13 +61,20 @@ export class ChatController {
     @Query('page') page?: number,
     @Query('limit') limit?: number
   ) {
-    // TODO: Pasar parámetros de paginación al servicio
-    return this.chatService.getHistory(studentId, conversationId);
+    const result = await this.chatService.getHistory(
+      studentId,
+      conversationId,
+      page ? Number(page) : undefined,
+      limit ? Number(limit) : undefined
+    );
+
+    if (conversationId && !result) {
+      throw new NotFoundException(`Conversación ${conversationId} no encontrada`);
+    }
+
+    return result;
   }
 
-  /**
-   * TODO: Implement history deletion
-   */
   @Delete('history/:studentId/:conversationId')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Eliminar historial de una conversación' })
@@ -76,11 +85,36 @@ export class ChatController {
   async deleteHistory(
     @Param('studentId') studentId: string,
     @Param('conversationId') conversationId: string
-  ) {
-    return this.chatService.deleteHistory(studentId, conversationId);
+  ): Promise<void> {
+    const result = await this.chatService.deleteHistory(studentId, conversationId);
+    if (!result) {
+      throw new NotFoundException(`Conversación ${conversationId} no encontrada`);
+    }
   }
 
-  /**
-   * TODO: Implement streaming endpoint
-   */
+  @Post('message/stream')
+  @ApiOperation({ summary: 'Enviar mensaje con respuesta en streaming (SSE)' })
+  @ApiResponse({ status: 200, description: 'Stream de tokens de la respuesta' })
+  @ApiResponse({ status: 503, description: 'Servicio de IA no disponible' })
+  async streamMessage(@Body() dto: SendMessageDto, @Res() res: Response): Promise<void> {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+
+    try {
+      for await (const event of this.chatService.streamResponse(dto)) {
+        res.write(`data: ${JSON.stringify(event)}\n\n`);
+      }
+    } catch (error) {
+      const message =
+        error instanceof ServiceUnavailableException || error instanceof Error
+          ? error.message
+          : 'Error al generar la respuesta';
+      res.statusCode = error instanceof ServiceUnavailableException ? 503 : 500;
+      res.write(`data: ${JSON.stringify({ error: message })}\n\n`);
+    }
+
+    res.end();
+  }
 }
