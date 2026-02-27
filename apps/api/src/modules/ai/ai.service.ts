@@ -3,6 +3,10 @@ import { ConfigService } from '@nestjs/config';
 import { OpenAiUnavailableException } from './exceptions/openai-unavailable.exception';
 import OpenAI from 'openai';
 import { ResponseInput } from 'openai/resources/responses/responses';
+import { withRateLimitAndRetry } from './ai.rate-limit';
+import { OpenAiInvalidResponseException } from './exceptions/openai-invalid-response.exception';
+import { OpenAiRateLimitException } from './exceptions/openai-rate-limit.exception';
+import { OpenAiMisconfiguredException } from './exceptions/openai-misconfigured.exception';
 
 interface MessageHistory {
   role: 'user' | 'assistant' | 'system';
@@ -83,7 +87,7 @@ Reglas:
     systemPrompt: string
   ): Promise<AiResponse> {
     if (!this.isConfigured()) {
-      this.logger.warn('OPENAI_API_KEY not configured. Placeholder responses will be used.');
+      this.logger.warn('OPENAI_API_KEY not configurado. Se usarán respuestas placeholder.');
       return this.generatePlaceholderResponse(userMessage);
     }
 
@@ -93,46 +97,50 @@ Reglas:
       { role: 'user', content: userMessage.trim() },
     ];
 
-    let lastError: unknown;
-
-    for (let attempt = 1; attempt <= AiService.RETRY_MAX_ATTEMPTS; attempt++) {
-      try {
-        const response = await this.openai.responses.create({
+    try {
+      const response = await withRateLimitAndRetry(async () => {
+        const result = await this.openai.responses.create({
           model: this.chatModel,
           input: messages,
         });
 
-        const content = response.output_text?.trim();
+        const content = result.output_text?.trim();
 
         if (!content) {
-          throw new Error('Empty response from OpenAI');
+          throw new OpenAiInvalidResponseException('Respuesta de OpenAI vacía');
         }
 
         return {
           content,
-          tokensUsed: response.usage?.total_tokens,
-          model: response.model,
+          tokensUsed: result.usage?.total_tokens,
+          model: result.model,
         };
-      } catch (error) {
-        lastError = error;
+      });
 
-        if (!this.shouldRetry(error) || attempt === AiService.RETRY_MAX_ATTEMPTS) {
-          break;
-        }
+      return response;
+    } catch (error) {
+      const status = error?.status ?? error?.response?.status;
 
-        const delayMs = AiService.RETRY_BASE_DELAY_MS * 2 ** (attempt - 1);
-        this.logger.warn(
-          `Transient OpenAI error (attempt ${attempt}/${AiService.RETRY_MAX_ATTEMPTS}). Retrying in ${delayMs}ms`
+      if (status === 429) {
+        throw new OpenAiRateLimitException(
+          'Demasiadas peticiones al asistente. Inténtalo de nuevo en unos segundos.',
+          error
         );
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
-    }
 
-    this.logger.error('Failed to generate response with OpenAI', lastError as Error);
-    throw new OpenAiUnavailableException(
-      'OpenAI no está disponible. Por favor, inténtalo de nuevo más tarde.',
-      lastError
-    );
+      if (status === 401 || status === 403) {
+        throw new OpenAiMisconfiguredException(
+          'Configuración de OpenAI inválida. Por favor, verifica tu API key.',
+          error
+        );
+      }
+
+      this.logger.error('Failed to generate response with OpenAI', error as Error);
+      throw new OpenAiUnavailableException(
+        'OpenAI no está disponible. Por favor, inténtalo de nuevo más tarde.',
+        error
+      );
+    }
   }
 
   async *generateStreamResponse(
@@ -242,19 +250,5 @@ Reglas:
    */
   isConfigured(): boolean {
     return !!this.configService.get<string>('OPENAI_API_KEY');
-  }
-
-  private shouldRetry(error: unknown): boolean {
-    if (!error || typeof error !== 'object') {
-      return false;
-    }
-
-    const maybeStatus = (
-      error as {
-        status?: number;
-      }
-    ).status;
-
-    return maybeStatus === 429 || (typeof maybeStatus === 'number' && maybeStatus >= 500);
   }
 }

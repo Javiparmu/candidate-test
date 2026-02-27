@@ -4,7 +4,7 @@ import { Types } from 'mongoose';
 import { ChatService } from './chat.service';
 import { AiService } from '../ai/ai.service';
 import { KnowledgeService } from '../knowledge/knowledge.service';
-import { ChatMessage } from './schemas/chat-message.schema';
+import { ChatMessage, ChatMessageDocument } from './schemas/chat-message.schema';
 import { Conversation } from './schemas/conversation.schema';
 
 describe('ChatService', () => {
@@ -64,7 +64,7 @@ describe('ChatService', () => {
     service = module.get<ChatService>(ChatService);
   });
 
-  function mockFindForHistory(messages: any[] = []) {
+  function mockFindForHistory(messages: ChatMessageDocument[] = []) {
     return mockChatMessageModel.find.mockReturnValue({
       sort: jest.fn().mockReturnThis(),
       limit: jest.fn().mockReturnThis(),
@@ -147,7 +147,7 @@ describe('ChatService', () => {
       await service.sendMessage({
         studentId,
         message: 'Hi',
-        conversationId: undefined as any,
+        conversationId: undefined,
       });
 
       expect(mockConversationModel.create).toHaveBeenCalledWith(
@@ -259,7 +259,7 @@ describe('ChatService', () => {
         .mockResolvedValueOnce({ _id: new Types.ObjectId(), role: 'assistant', content: 'Reply' });
       mockKnowledgeService.searchSimilar.mockResolvedValue([]);
       mockAiService.generateResponseWithRAG.mockImplementation((_msg, history) => {
-        const hasInitial = history.some((m: any) => m.role === 'system' && m.content === 'Initial context');
+        const hasInitial = history.some((m) => m.role === 'system' && m.content === 'Initial context');
         return Promise.resolve({
           content: hasInitial ? 'Reply' : 'No context',
           tokensUsed: 5,
@@ -455,8 +455,8 @@ describe('ChatService', () => {
       }
 
       expect(events.some((e) => e.conversationId)).toBe(true);
-      expect(events.filter((e) => (e as any).token)).toHaveLength(3);
-      expect(events.some((e) => (e as any).done === true && (e as any).messageId)).toBe(true);
+      expect(events.filter((e) => e.token)).toHaveLength(3);
+      expect(events.some((e) => e.done === true && e.messageId)).toBe(true);
     });
 
     it('should handle streaming errors', async () => {
@@ -511,7 +511,7 @@ describe('ChatService', () => {
 
       const last = events[events.length - 1];
       expect(last).toMatchObject({ done: true });
-      expect((last as any).messageId).toBeDefined();
+      expect(last.messageId).toBeDefined();
     });
   });
 });

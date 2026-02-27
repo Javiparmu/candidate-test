@@ -1,6 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
 import { AiService } from './ai.service';
+import { HttpException } from '@nestjs/common';
 
 const mockResponsesCreate = jest.fn();
 
@@ -163,9 +164,36 @@ describe('AiService', () => {
       });
 
       it('should handle OpenAI API errors', async () => {
-        mockResponsesCreate.mockRejectedValue(new Error('API Error'));
+        mockResponsesCreate.mockRejectedValue(new Error('Upstream failure'));
 
-        await expect(service.generateResponse('Hello')).rejects.toThrow('OpenAI no está disponible');
+        await expect(service.generateResponse('Hello')).rejects.toBeInstanceOf(HttpException);
+
+        await expect(service.generateResponse('Hello')).rejects.toMatchObject({
+          status: 503,
+        });
+      });
+
+      it('should respect rate limits', async () => {
+        const rateLimitError: Error & { status?: number } = new Error('Rate limited');
+        rateLimitError.status = 429;
+
+        mockResponsesCreate
+          .mockRejectedValueOnce(rateLimitError)
+          .mockResolvedValueOnce({
+            output_text: 'Success after retry',
+            usage: { total_tokens: 30 },
+            model: 'gpt-4',
+          });
+
+        const result = await service.generateResponse('Hello');
+
+        expect(mockResponsesCreate).toHaveBeenCalledTimes(2);
+        expect(result).toEqual(
+          expect.objectContaining({
+            content: 'Success after retry',
+            model: 'gpt-4',
+          })
+        );
       });
 
       it('should return token usage information', async () => {
